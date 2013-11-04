@@ -1,0 +1,49 @@
+For compiling use following command.
+g++ ExoRedis_socket.cpp -o test_socket
+
+Run.
+1. Run the test_socket.
+2. telnet to it on port 15000.
+
+Commands supported.
+SET key value
+GET key
+SETBIT key offset value
+GETBIT key offset
+SETEX KEY ttl value
+SETPX KEY ttl value
+SETNX key value
+SETXX key value
+EXPIRE hey ttl
+TTL key
+PTTL key
+ZADD set value key
+ZCARD set
+ZCOUNT set min max
+ZRANGE set min max
+SAVE filname
+LOAD filename
+
+Limits:
+1. The set can store max pair of 32767. 
+2. There can be maximum 127 sorted set. Where each set can store around 3500 - 4000 Differnt pairs.
+3. Only one connection will be supported in the current prototype.
+
+Implementation high lights.
+1. Set uses hash table of size 32767 with linear probe 20. It stores the address of key, value pair. and ttl value is stored in the hash table. The key value pair is stored in preallocated memory buffer (shared memory 300 pages).
+
+2. Sorted test uses hash table of size 127 with linear probe 20. It stores the root address of BST(Binary search tree). The nodes and key of the BST are stored in the shared memory buffer allocated during the creation of new sorted set.(shared memory pages 50).
+
+
+
+Files and implementation details. 
+1. ExoRedis_socket.cpp
+This file contains code for tcp connection and command interpretor.
+
+2. redis.cpp
+This file contains code for redis data base whic internaly uses memory.cpp for memory management.
+
+3. memory.cpp
+memory.cpp contains the code for memory management. Shared memory buffer is taken from the system it is used to implement custim allocating and dellocating function.
+ 
+
