@@ -3,6 +3,7 @@
 #include<string.h>
 #include<stdio.h>
 #include<time.h>
+#include<sys/time.h>
 #include<stdlib.h>
 #include "memory.cpp"
 #define SIZE_HASH_TABLE INT_MAX>>16
@@ -13,7 +14,7 @@ using namespace std;
 
 typedef struct map{
 	unsigned int size;
-	time_t extime;
+	struct timeval extime;	
 	char *value;
 }map_t;
 typedef struct node{
@@ -326,7 +327,8 @@ class table: private memory{
 	table():memory(300){
 		int i;
 		for(i = 0; i < SIZE_HASH_TABLE; i++){
-			hash_table[i].extime = 0;
+			hash_table[i].extime.tv_sec = 0;
+			hash_table[i].extime.tv_usec = 0;
 		} 
 	}
 	unsigned int MurmurHash2(const void *key, int len);
@@ -344,34 +346,77 @@ class table: private memory{
 	void TTL(const char key[], char *buff);
 	void PTTL(const char key[], char *buff);
 	int save(FILE *fp);
+	void timeval_add (struct timeval *result, struct timeval *t2,  struct timeval *t1);
+	int timeval_subtract (struct timeval *result, struct timeval *t2,  struct  timeval *t1);
 	void show_memory(){
 		memory::show_memory();
 	}
 };
+int table:: timeval_subtract (struct timeval *result, struct timeval *t2,  struct timeval *t1){
+	/* Perform the carry for the later subtraction by updating y. */
+	if (t2->tv_usec < t1->tv_usec) {
+		int nsec = (t1->tv_usec - t2->tv_usec) / 1000000 + 1;
+		t1->tv_usec -= 1000000 * nsec;
+		t1->tv_sec += nsec;
+	}
+	if (t2->tv_usec - t1->tv_usec > 1000000) {
+		int nsec = (t2->tv_usec - t1->tv_usec) / 1000000;
+		t1->tv_usec += 1000000 * nsec;
+		t1->tv_sec -= nsec;
+	}
+	/* Compute the time remaining to wait.
+	   tv_usec is certainly positive. */
+	result->tv_sec = t2->tv_sec - t1->tv_sec;
+	result->tv_usec = t2->tv_usec - t1->tv_usec;
+
+	/* Return 1 if result is negative. */
+	return t2->tv_sec < t1->tv_sec;
+}
+void table:: timeval_add (struct timeval *result, struct timeval *t2,  struct timeval *t1){
+	result->tv_sec = t2->tv_sec + t1->tv_sec;
+	result->tv_usec = t2->tv_usec + t1->tv_usec;
+
+	if(result->tv_usec >= 1000000){
+		int nsec = result->tv_usec / 1000000;
+		result->tv_sec += nsec;
+		result->tv_usec -= (nsec * 1000000);
+	}
+}
+
 int table::save(FILE *fp){
 	int i;
+	struct timeval extime, curtime, result;
 	for(i = 0; i < SIZE_HASH_TABLE; i++){
-		if(hash_table[i].extime){
+		if(hash_table[i].extime.tv_sec){
 			fwrite("2",1,1,fp);		
 			fwrite(&hash_table[i].size,1,4,fp);	
 			fwrite(hash_table[i].value,1,hash_table[i].size,fp);
-			hash_table[i].extime = hash_table[i].extime - time(NULL);	
-			fwrite(&hash_table[i].extime,1,4,fp);
-			hash_table[i].extime = hash_table[i].extime + time(NULL);	
+			extime =  hash_table[i].extime;
+			gettimeofday(&curtime,NULL);	
+			timeval_subtract(&result, &extime, &curtime);			
+			fwrite(&result , 1, sizeof(timeval), fp);
 		}
 	} 
 }
 void table:: TTL(const char key[], char *buff){
 	int index = GET(key);	
+	struct timeval extime, curtime, result;
 	if(index != -1){
-		sprintf(buff,"(integer) %ld",(hash_table[index].extime - time(NULL)));
+		extime =  hash_table[index].extime;
+		gettimeofday(&curtime,NULL);	
+		timeval_subtract(&result, &extime, &curtime);			
+		sprintf(buff,"(integer) %ld",result.tv_sec);
 		return;
 	}	
 }
 void table::PTTL(const char key[], char *buff){
 	int index = GET(key);	
+	struct timeval extime, curtime, result;
 	if(index != -1){
-		sprintf(buff,"(integere %ld",((hash_table[index].extime - time(NULL))*1000));
+		extime =  hash_table[index].extime;
+		gettimeofday(&curtime,NULL);	
+		timeval_subtract(&result, &extime, &curtime);			
+		sprintf(buff,"(integere %ld",(result.tv_sec*100 + result.tv_usec/10000));
 		return;
 	}	
 }
@@ -513,7 +558,7 @@ int table:: GET(const char key[]){
 	int probe = 0;
 	index = MurmurHash2(key, len1) % SIZE_HASH_TABLE;
 	while(probe < LINEAR_PROBE && index < SIZE_HASH_TABLE){
-		if(hash_table[index].extime){
+		if(hash_table[index].extime.tv_sec){
 			COPY_KEY(hash_table[index].value, hash_table[index].size, buff);
 			//printf("copy key %s\n", buff);			
 			if(!strcmp(key, buff))
@@ -528,16 +573,24 @@ int table:: GET(const char key[]){
 }
 int table:: SETEX(const char key[],int exsec){
 	int index = GET(key);	
+	struct timeval extime, curtime, result;
 	if(index != -1){
-		hash_table[index].extime = time(NULL) + exsec;
+		extime.tv_sec = exsec;
+		extime.tv_usec = 0;	
+		gettimeofday(&curtime,NULL);	
+		timeval_add(&hash_table[index].extime, &extime, &curtime);
 		return 1;
 	}	
 	return 0;
 }
 int table:: SETPX(const char key[],int exsec){
-	int index = GET(key);
-	if(index != -1) {
-		hash_table[index].extime = time(NULL) + (exsec)/1000;	
+	int index = GET(key);	
+	struct timeval extime, curtime, result;
+	if(index != -1){
+		extime.tv_sec = exsec/100;
+		extime.tv_usec = (exsec%100)*10000;	
+		gettimeofday(&curtime,NULL);	
+		timeval_add(&hash_table[index].extime, &extime, &curtime);
 		return 1;
 	}	
 	return 0;
@@ -546,7 +599,7 @@ int table:: SETXX(const char key[], const char value[]){
 	int index = GET(key);
 	if(index != -1) {
 		del(hash_table[index].value, hash_table[index].size);
-		hash_table[index].extime = 0;		
+		hash_table[index].extime.tv_sec = 0;		
 		return SET(key,value);
 	}
 	else	
@@ -573,7 +626,7 @@ int table:: SET(const char key[], const char value[]){
 		return SETXX(key, value);
 	}
 	index = MurmurHash2(key, len1) % SIZE_HASH_TABLE;
-	while(hash_table[index].extime){
+	while(hash_table[index].extime.tv_sec){
 		index++;
 		probe++;
 		if(probe == LINEAR_PROBE || index == SIZE_HASH_TABLE)
@@ -587,7 +640,9 @@ int table:: SET(const char key[], const char value[]){
 //	printf("Index %d <key,value> %s  %u\n",index, buff,(unsigned int) addr_memory);		
 	hash_table[index].size = len1; 
 	hash_table[index].value = addr_memory;
-	hash_table[index].extime = time(NULL);	
+	gettimeofday(&hash_table[index].extime,NULL);	
+	if(!hash_table[index].extime.tv_sec)
+		hash_table[index].extime.tv_sec++;
 	return 1;
 }
 /*
@@ -598,38 +653,13 @@ int main(){
 	const char str4[] = "bathla";
 	table obj;
 	char buff[1024];
-	obj.SETXX(str1, str4);
+	obj.SETNX(str1, str4);
 	obj.VALUE(str1, buff);
 	//obj.show_memory();
 	printf("key %s value %s\n", str1, buff);
 	obj.VALUE(str3,buff);
 	printf("key %s value %s\n", str3, buff);
 	int off = 0,	val = 0;
-	off = 8; val = 1;	
-	obj.SETBIT(str1, off, val);
-	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));
-	obj.VALUE(str1,buff);
-	printf("key %s value %s\n", str1, buff);
-	off = 8; val = 0;	
-	obj.SETBIT(str1, off, val);
-	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));
-	obj.VALUE(str1,buff);
-	printf("key %s value %s\n", str1, buff);
-	off = 3; val = 0;	
-	obj.SETBIT(str1, off, val);
-	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));
-	off = 4; val = 0;	
-	obj.SETBIT(str1, off, val);
-	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));
-	off = 5; val = 0;	
-	obj.SETBIT(str1, off, val);
-	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));
-	off = 6; val = 0;	
-	obj.SETBIT(str1, off, val);
-	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));
-	off = 7; val = 0;	
-	obj.SETBIT(str1, off, val);
-	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));
 	off = 8; val = 0;	
 	obj.SETBIT(str1, off, val);
 	printf("bit str1 off %d := %d\n",off, obj.GETBIT(str1,off));

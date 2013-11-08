@@ -321,6 +321,7 @@ int redis::load(const char *file){
 	int data1, data2;
 	int len1,len2;
 	char *ptr1, *ptr2;
+	struct timeval expire;
 	FILE *fp = fopen(file,"rb");
 	if(!fp)
 		return 0;
@@ -342,11 +343,11 @@ int redis::load(const char *file){
 					ptr2++;
 				*ptr2 = '\0';
 				ptr2++;
-				if(fread(&data1, 1, 4, fp) != 4)
+				if(fread(&expire, 1, sizeof(expire), fp) != sizeof(expire))
 					return 0;
 				sprintf(cmd,"SET %s %s\r\n",name1, ptr2);				
 				this->call_redis(cmd,cmd);
-				sprintf(cmd,"EXPIRE %s %d\r\n", name1, data1);	
+				sprintf(cmd,"EXPIRE %s %ld\r\n", name1, expire.tv_sec);
 				this->call_redis(cmd,cmd);
 				fread(data_b,1,1,fp);
 				data1 = (int)data_b[0];
