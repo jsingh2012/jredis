@@ -8,7 +8,14 @@
 #include <string.h>
 #include <sys/types.h>
 #include <time.h> 
+#include <pthread.h>
+#include <stdio.h>
+#include <limits.h>
+#include <semaphore.h>
 #include "redis.cpp"
+sem_t job_queue_count;
+
+
 class redis{
 	table set;
 	tree  range; 
@@ -18,52 +25,91 @@ class redis{
 	int save(const char *file);
 	int load(const char *file);
 }database;
+#define MAXCON 100
+struct con{
+	int connfd;
+	pthread_t thread_id;
+	char send_buff[1025];
+	char receive_buff[1025];
+};
+typedef struct con con_t;
+class connection{
+	public:
+		con_t connect[MAXCON];
+		connection(){
+			memset(connect, 0, sizeof(connect));
+		}
+		int getcon(){
+			int i;
+			for(i = 0; i < MAXCON; i++){
+				if(connect[i].connfd == 0)
+					return i;
+
+			}
+			return -1;
+		}
+		void freecon(con_t *con){
+			con->connfd = 0;
+		}
+};
+void* client(void *parameter){
+	con_t *con = (con_t*) (parameter);
+#define send_buff con->send_buff
+#define receive_buff con->receive_buff
+#define connfd con->connfd 
+	while(1){		  
+		sprintf(send_buff,"$: \r\n");		    
+		write(connfd, send_buff, strlen(send_buff)); 
+		memset(receive_buff,'\0',sizeof(receive_buff));			    
+		read(connfd, receive_buff, 1025);
+		printf("Received data %s", receive_buff);
+		sem_wait(&job_queue_count);
+		if(!database.call_redis(receive_buff,send_buff)){
+			sem_post (&job_queue_count);
+			sprintf(send_buff,"%s\r\n",send_buff);		    
+			write(connfd, send_buff, strlen(send_buff));
+		}
+		else{
+			sem_post (&job_queue_count);
+			close(connfd);
+			connfd = 0;
+			break;
+		}
+	}  
+	return (void*)con;
+#undef send_buff
+#undef receive_buff
+#undef connfd
+}
 int main(int argc, char *argv[])
 {
-	int listenfd = 0, connfd = 0;
-    struct sockaddr_in serv_addr; 
+	int listenfd = 0;
+	connection connections;
+	struct sockaddr_in serv_addr; 
 
-    char send_buff[1025];
-    char receive_buff[1025];
-    time_t ticks; 
-    char buff[1024];
+	listenfd = socket(AF_INET, SOCK_STREAM, 0);
+	memset(&serv_addr, '0', sizeof(serv_addr));
 
-    listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    memset(&serv_addr, '0', sizeof(serv_addr));
-    memset(send_buff, '0', sizeof(send_buff)); 
-
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(15000); 
-    serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)); 
-    listen(listenfd, 10); 
-
-    while(1)
-    {
-	    printf("Server is listenning on port 15000\n");
-	    connfd = accept(listenfd, (struct sockaddr*)NULL, NULL);
-	    { 
-		    while(1){		  
-			    sprintf(send_buff,"$: \r\n");		    
-			    write(connfd, send_buff, strlen(send_buff)); 
-			    memset(receive_buff,'\0',sizeof(receive_buff));			    
-			    read(connfd, receive_buff, 1025);
-			    printf("Received data %s", receive_buff);		  
-			    if(!database.call_redis(receive_buff,send_buff)){
-				    sprintf(send_buff,"%s\r\n",send_buff);		    
-				    write(connfd, send_buff, strlen(send_buff));
-			    }
-			    else{
-				    close(connfd);
-				    break;
-			    }
-		    }  
-	    }
-	    sleep(1);
-    }
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_port = htons(15000); 
+	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)); 
+	listen(listenfd, 10); 
+	sem_init (&job_queue_count, 0, 1);
+	while(1)
+	{
+		printf("Server is listenning on port 15000\n");
+		int i = connections.getcon();
+		connections.connect[i].connfd = accept(listenfd, (struct sockaddr*)NULL, NULL);
+		{ 
+			/* Create a new thread. The new thread will run the print_xs
+			   function. */
+			pthread_create (&connections.connect[i].thread_id, NULL, &client, &connections.connect[i]);
+		}
+	}
 }
 #define COMMANDS \
-CMD(GET,0,"GET")\
+	CMD(GET,0,"GET")\
 CMD(SET, 1,"SET")\
 CMD(SETEX,2,"SETEX")\
 CMD(SETPX,3,"SETPX")\
@@ -83,11 +129,11 @@ CMD(LOAD,16,"LOAD")
 
 int redis:: get_command(char *ptr){
 #define CMD(val1,val2, val3)\
-if(!strcmp(ptr,val3))\
+	if(!strcmp(ptr,val3))\
 	return val2;
 	COMMANDS
 #undef CMD
-return INT_MAX;
+		return INT_MAX;
 }
 int redis::call_redis(char *indata, char *outdata){
 	char *str1;
@@ -133,7 +179,7 @@ int redis::call_redis(char *indata, char *outdata){
 		}\
 		else{\
 			*outdata = '0';\
-				return 1;\
+			return 1;\
 		}\
 	}\
 	indata++;\
@@ -373,7 +419,7 @@ int redis::load(const char *file){
 				break;
 		}
 	}
-return 1;
+	return 1;
 }
 int redis::save(const char *file){
 	FILE *fp = fopen(file,"wb");
