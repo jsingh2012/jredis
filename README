@@ -5,6 +5,7 @@ Run.
 1. Run the test_socket.
 2. telnet to it on port 15000.
 
+//Start of commands
 Commands supported.
 SET key value
 GET key
@@ -23,6 +24,7 @@ ZCOUNT set min max
 ZRANGE set min max
 SAVE filname
 LOAD filename
+//End of commands
 
 Limits:
 1. The set can store max pair of 32767. 
