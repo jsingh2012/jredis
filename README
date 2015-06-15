@@ -49,4 +49,5 @@ This file contains code for redis data base whic internaly uses memory.cpp for m
 3. memory.cpp
 memory.cpp contains the code for memory management. Shared memory buffer is taken from the system it is used to implement custim allocating and dellocating function.
  
+//Ok no more working with git commands.
 //END DOC
